@@ -1,4 +1,16 @@
-local_temp_dir=./temp_data
-nas_destination=/mnt/nas/output
-log_dir=/home/gpadmin/gpoffload/logs
-data_type_file_path=/MNT/GP_DWS/mig_table_data_type/
+local_temp_dir=/data/AIS-EDW/gpoffload/script_reconcile_query_greenplum/temp/
+nas_destination=/MNT/GP_DWS/mig_reconcile_query_gp_output
+log_dir=/data/AIS-EDW/gpoffload/script_reconcile_query_greenplum/log
+metadata_base_dir=/MNT/GP_DWS/mig_table_info
+mapping_file_path=/data/AIS-EDW/gpoffload/script_reconcile_query_greenplum/config/data_type_mapping.json
+
+# --- Number Solution Default Config ---
+default_numeric_p=38
+default_numeric_s=10
+cast_real_p=24
+cast_real_s=6
+cast_double_p=38
+cast_double_s=15
+round_numeric=10
+round_real=5
+round_double=14
