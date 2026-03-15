@@ -31,5 +31,6 @@
 !/script_reconcile_content/script/script_reconcile_content.py
 
 # หากต้องการเก็บไฟล์ทั้งหมดในโฟลเดอร์ config ให้ใช้แบบนี้
+!/script_query_greenplum/config/
 !/script_sum_reconcile/config/
 !/script_reconcile_content/config/
