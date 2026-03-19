@@ -905,11 +905,14 @@ class Worker(threading.Thread):
         except Exception as e:
             return False, str(e)
 
-    def logging_status(self):
+    def logging_status(self, status, remark=""):
         # 1. Define directory path
         # temp status directory: <temp>/<date>/stat_csv/<db>/<schema>
         status_dir = os.path.join(self.config.local_temp_dir, 'stat_csv', self.db, self.schema)
         self.logger.info("[{0}] Logging status to directory: {1}".format(self.name, status_dir))
+        #self.status = status
+
+        remark = "-" if status.upper() == "SUCCESS" else remark
 
         # 2. Directory creation with Race Condition handling
         if not os.path.exists(status_dir):
@@ -937,9 +940,9 @@ class Worker(threading.Thread):
         # 4. Attribute retrieval with getattr
         short_name = getattr(self, "short_name", "")
         start_ts = getattr(self, "start_ts_tbl", "")
-        status = getattr(self, "status", "")
-        error_message = getattr(self, "error_message", "").replace('\n', ' ')
-        json_output_path = getattr(self, "json_output_path_file", "")
+        #status = getattr(self, "status", "")
+        #error_message = getattr(self, "error_message", "").replace('\n', ' ')
+        json_output_path = getattr(self, "local_json_file", "")
         reconcile_method = getattr(self, "reconcile_method", [])
         self.logger.info("[{0}] Retrieved attributes for logging. Short Name: {1}, Start TS: {2}, Status: {3}".format(
             self.name, short_name, start_ts, status
@@ -965,7 +968,16 @@ class Worker(threading.Thread):
         reconcile_method_str = ",".join(set(reconcile_method)) if reconcile_method else ""
 
         # 7. Construct and encode row
-        row = [short_name, start_ts, end_ts, duration_str, reconcile_method_str, status, error_message, json_output_path]
+        row = [
+            short_name, 
+            start_ts, end_ts, 
+            duration_str, 
+            reconcile_method_str, 
+            status, 
+            remark, 
+            json_output_path, 
+            "" # remark
+            ] 
 
         row = [s.encode('utf-8') if isinstance(s, unicode) else str(s) for s in row]
 
@@ -989,19 +1001,19 @@ class Worker(threading.Thread):
             lookup_col = col.strip().lower()
             datatype = type_map.get(lookup_col)
             if datatype is None:
-                err_msg = "Column: {0} is not found in data type file".format(col)
-                self.logger.error("[{0}] {1}".format(self.name, err_msg))
-                manual_num_err.append(err_msg)
+                remark = "Column: {0} is not found in data type file".format(col)
+                self.logger.error("[{0}] {1}".format(self.name, remark))
+                manual_num_err.append(remark)
                 continue
             
             base_datatype = datatype.split('(')[0].strip().lower()
             if base_datatype in ['bigint', 'integer', 'int']:
                 new_master_info['manual_num'].append(col)
             else:
-                err_msg = "Column: {0} is NOT bigint or integer (data type = {1})".format(col, datatype)
-                self.logger.error("[{0}] {1}".format(self.name, err_msg))
-                manual_num_err.append(err_msg)
-                
+                remark = "Column: {0} is NOT bigint or integer (data type = {1})".format(col, datatype)
+                self.logger.error("[{0}] {1}".format(self.name, remark))
+                manual_num_err.append(remark)
+
         self.logger.info("DEBUG: new_master_info = {0}".format(new_master_info))
         return new_master_info, manual_num_err
 
@@ -1168,12 +1180,12 @@ class Worker(threading.Thread):
                         f.write(str(expr) + "\n")
 
                 out_file_name = "parquet_{0}_{1}_{2}_{3}.json".format(db, schema, partition, self.global_ts)
-                local_json_file = os.path.join(self.out_path, out_file_name)
+                self.local_json_file = os.path.join(self.out_path, out_file_name)
                 
-                with open(local_json_file, 'w') as f:
+                with open(self.local_json_file, 'w') as f:
                     json.dump(final_json, f)
 
-                copy_success, copy_err = self._copy_file_to_nas(local_json_file, db, schema, out_file_name)
+                copy_success, copy_err = self._copy_file_to_nas(self.local_json_file, db, schema, out_file_name)
                 
                 if copy_success:
                     self.logger.info("Worker {0} successfully saved local files and copied JSON to NAS for {1}".format(self.name, partition))
@@ -1193,21 +1205,21 @@ class Worker(threading.Thread):
                 #self.hive_logger.log_execution_status(self.execution_id, db, schema, base_table, partition, start_datetime, datetime.now(), duration, status.lower(), remark)
 
             except ValueError as ve:
-                msg = str(ve)
-                if "SKIPPED" in msg:
+                remark = str(ve)
+                if "SKIPPED" in remark:
                     status = "SKIPPED"
-                    msg = msg.replace("SKIPPED: ", "").replace("SKIPPED", "").strip()
+                    remark = remark.replace("SKIPPED: ", "").replace("SKIPPED", "").strip()
                 else:
                     status = "FAILED"
-                self.tracker.add_result(partition, status, time.time() - start_t, msg)
+                self.tracker.add_result(partition, status, time.time() - start_t, remark)
                 #self.hive_logger.log_execution_status(self.execution_id, db, schema, base_table, partition, start_datetime, datetime.now(), time.time() - start_t, status.lower(), msg)
             except Exception as e:
-                err_msg = str(e)
+                remark = str(e)
                 # self.logger.warning("Worker {0} failed on {1}: {2}".format(self.name, partition, repr(e)))
                 self.logger.warning("Worker {0} failed on {1}: {2}".format(self.name, partition, e))
-                self.tracker.add_result(partition, "FAILED", time.time() - start_t, "Error: {0}".format(err_msg[:50]))
-                self.hive_logger.log_execution_status(self.execution_id, db, schema, base_table, partition, start_datetime, datetime.now(), time.time() - start_t, "failed", err_msg[:200])
-                if "CRITICAL_FAILED:" in err_msg:
+                self.tracker.add_result(partition, "FAILED", time.time() - start_t, "Error: {0}".format(remark[:50]))
+                self.hive_logger.log_execution_status(self.execution_id, db, schema, base_table, partition, start_datetime, datetime.now(), time.time() - start_t, "failed", remark[:200])
+                if "CRITICAL_FAILED:" in remark:
                     self.logger.critical("Worker {0} signaling global abort due to CRITICAL_FAILED condition.".format(self.name))
                     self.abort_event.set()
                     break
@@ -1215,7 +1227,7 @@ class Worker(threading.Thread):
                 # After finishing processing, write one CSV line:
                 try:
                     self.logger.info("Worker {0} logging status for {1}...".format(self.name, full_name))
-                    self.logging_status()
+                    self.logging_status(status, remark)
                 except Exception as e:
                     self.logger.error("Failed writing logging_status for {}: {}".format(full_name, e))
                 self.queue.task_done()
