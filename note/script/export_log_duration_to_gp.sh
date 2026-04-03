@@ -201,7 +201,7 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
         echo "SRC_REC_PQ: ${SRC_REC_PQ}"
         if ls ${SRC_REC_PQ} 1> /dev/null 2>&1; then
 
-            echo "   -> Processing Reconcile PQ (Full & Adding FULL_PATH at end)..."
+            echo "   -> Processing Reconcile PQ (Full & Adding DB_NAME at start, FULL_PATH at end)..."
             #cat ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
 
             # ใช้ awk เพื่อพิมพ์ข้อมูลทั้งบรรทัด ($0) ตามด้วย Full Path (FILENAME)
@@ -525,7 +525,7 @@ else
 fi
 
 echo "=============================================================="
-echo "🎯 ALL DATABASE TASKS COMPLETED"
+echo " ALL DATABASE TASKS COMPLETED"
 echo "=============================================================="
 
 
@@ -596,5 +596,78 @@ else
 fi
 
 echo "=============================================================="
-echo "🎯 ALL TASKS COMPLETED SUCCESSFULLY"
+echo " ALL TASKS VIEW EXPORT COMPLETED"
+echo "=============================================================="
+
+
+# --- 7. Update Full Latest Result Table ---
+echo ""
+echo "=============================================================="
+echo " UPDATE SUMMARY RESULT TABLE"
+echo "=============================================================="
+
+TARGET_SUMMARY_TABLE="gpoffload.log_latest_result"
+
+echo -e "\n${BLUE}│${NC}"
+printf "${BLUE}│  ${YELLOW}Target Table: %s${NC}\n" "$TARGET_SUMMARY_TABLE"
+echo -e "${BLUE}├───────────────────────────────────${NC}"
+
+# 1. Truncate ตารางเก่าออกก่อน
+echo -e "${BLUE}├─${NC} Action 1: Truncating old data..."
+run_psql_command "TRUNCATE TABLE $TARGET_SUMMARY_TABLE;"
+if [ $? -ne 0 ]; then
+    echo -e "${BLUE}│  ${RED}✘${NC} Truncate failed. Stopping process."
+    exit 1
+fi
+
+# 2. Insert ข้อมูลใหม่จากการ Join Views
+echo -e "${BLUE}├─${NC} Action 2: Inserting latest consolidated data..."
+
+INSERT_SQL="INSERT INTO $TARGET_SUMMARY_TABLE
+SELECT
+    t.dbname AS db_name,
+    t.schemaname AS schema_name,
+    t.tablename AS table_name,
+    exp.external_tbl AS external_tbl,
+    exp.run_status AS export_sts,
+    exp.err_message AS export_err_msg,
+    rc_gp.run_status AS reconcile_gp_sts,
+    rc_gp.error_message AS reconcile_gp_err_msg,
+    rc_pq.run_status AS reconcile_pq_sts,
+    rc_pq.error_message AS reconcile_pq_err_msg,
+    rc_compare.run_status AS reconcile_compare_sts,
+    rc_compare.error_message AS reconcile_compare_err_msg
+FROM 
+    gpoffload.vw_full_bk_table_info t
+LEFT JOIN 
+    gpoffload.vw_log_latest exp
+ON t.dbname = exp.greenplum_db
+AND t.schemaname || '.' || t.tablename = exp.greenplum_tbl
+LEFT JOIN
+    gpoffload.vw_log_query_gp_latest rc_gp
+ON t.dbname = rc_gp.greenplum_db
+AND t.schemaname || '.' || t.tablename = rc_gp.greenplum_tbl
+LEFT JOIN 
+    gpoffload.vw_log_query_pq_latest rc_pq
+ON t.dbname = rc_pq.greenplum_db
+AND t.schemaname || '.' || t.tablename = rc_pq.greenplum_tbl
+LEFT JOIN
+    gpoffload.vw_log_reconcile_status_count_latest rc_compare
+ON t.dbname = rc_compare.greenplum_db
+AND t.schemaname || '.' || t.tablename = rc_compare.greenplum_tbl;"
+
+run_psql_command "$INSERT_SQL"
+
+if [ $? -eq 0 ]; then
+    printf "${BLUE}│  ${GREEN}✔${NC} Data updated successfully to ${YELLOW}%s${NC}\n" "$TARGET_SUMMARY_TABLE"
+else
+    printf "${BLUE}│  ${RED}✘${NC} Insert failed!\n"
+    exit 1
+fi
+
+echo -e "${BLUE}└───────────────────────────────────${NC}"
+
+echo ""
+echo "=============================================================="
+echo " ALL SCRIPT PROCESSES COMPLETED"
 echo "=============================================================="
