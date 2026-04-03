@@ -170,10 +170,18 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
         if ls ${SRC_OFFLOAD} 1> /dev/null 2>&1; then
 
             #echo "   -> Processing Offload GP (Removing Headers)..." # old process for local
-            echo "   -> Processing Offload GP (Full Append)..."
+            echo "   -> Processing Offload GP (Full Append & Adding DB_NAME at start, FULL_PATH at end)..."
 
             #sed -s '1d' ${SRC_OFFLOAD} >> "$FULL_PATH_OFFLOAD" # old process for local
-            cat ${SRC_OFFLOAD} >> "$FULL_PATH_OFFLOAD"
+            #cat ${SRC_OFFLOAD} >> "$FULL_PATH_OFFLOAD"
+
+            # a[5]     = database_name (ดึงมาจากลำดับที่ 5 ใน path)
+            # $0       = ข้อมูลทั้งหมดในบรรทัดนั้น (Original Data)
+            # FILENAME = Full Path ของไฟล์นั้นๆ เช่น /MNT/GP_DWS/mig_stat_log/DB_A/20260403/offloadgp_01.csv
+            awk -F, -v OFS=',' '{ 
+                split(FILENAME, a, "/"); 
+                print a[5], $0, FILENAME 
+            }' ${SRC_OFFLOAD} >> "$FULL_PATH_OFFLOAD"
         
             #raw_ln=$(cat ${SRC_OFFLOAD} | wc -l) # old process for local
             #f_cnt=$(ls -1 ${SRC_OFFLOAD} | wc -l) # old process for local
@@ -192,8 +200,31 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
         echo "SRC_REC_PQ: ${SRC_REC_PQ}"
         if ls ${SRC_REC_PQ} 1> /dev/null 2>&1; then
 
-            echo "   -> Processing Reconcile PQ (Full Append)..."
-            cat ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
+            echo "   -> Processing Reconcile PQ (Full & Adding FULL_PATH at end)..."
+            #cat ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
+
+            # ใช้ awk เพื่อพิมพ์ข้อมูลทั้งบรรทัด ($0) ตามด้วย Full Path (FILENAME)
+            # ปรับ -F และ OFS เป็น ',' ( ',' ตามไฟล์ต้นฉบับ)
+            #awk -F',' -v OFS=',' '{ print $0, FILENAME }' ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
+
+            # คำอธิบาย Index จาก Path ตัวอย่างของคุณ:
+            # / [1] MNT [2] GP_DWS [3] mig_reconcile_query_parquet_output [4] 20260325 [5] prodgp [6] ...
+            # ดังนั้น database_name คือ a[6]
+            #awk -F',' -v OFS=',' '{ 
+            #    split(FILENAME, a, "/"); 
+            #    print a[6], $0, FILENAME 
+            #}' ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
+
+            # 1. ลบตัว \r (Carriage Return) ที่อาจติดมาท้ายบรรทัด
+            # 2. แยก Path เพื่อหา Database Name (ลำดับที่ 6)
+            # 3. พิมพ์: [DB_Name],[ข้อมูลเดิมทุกคอลัมน์],[Full_Path]
+            # ใช้ OFS="," เพื่อคุมตัวคั่นตอนออกให้ชัดเจน
+            awk -F',' -v OFS=',' '{ 
+                sub(/\r$/, "", $0); 
+                split(FILENAME, a, "/"); 
+                print a[6], $0, FILENAME 
+            }' ${SRC_REC_PQ} >> "$FULL_PATH_REC_PQ"
+
         
             data_ln=$(cat ${SRC_REC_PQ} | wc -l)
             TOTAL_EXP_REC_PQ=$((TOTAL_EXP_REC_PQ + data_ln))
@@ -209,8 +240,24 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
         echo "SRC_REC_GP: ${SRC_REC_GP}"
         if ls ${SRC_REC_GP} 1> /dev/null 2>&1; then
 
-            echo "   -> Processing Reconcile GP (Full Append)..."
-            cat ${SRC_REC_GP} >> "$FULL_PATH_REC_GP"
+            echo "   -> Processing Reconcile GP (Full & Adding FULL_PATH at end)..."
+            #cat ${SRC_REC_GP} >> "$FULL_PATH_REC_GP"
+
+            # ใช้ awk เพื่อพิมพ์ข้อมูลทั้งบรรทัด ($0) ตามด้วย Full Path (FILENAME)
+            #awk -F',' -v OFS=',' '{ print $0, FILENAME }' ${SRC_REC_GP} >> "$FULL_PATH_REC_GP"
+
+            # คำอธิบาย Index จาก Path ตัวอย่างของคุณ:
+            # / [1] MNT [2] GP_DWS [3] mig_reconcile_query_parquet_output [4] 20260325 [5] prodgp [6] ...
+            # ดังนั้น database_name คือ a[6]
+            # 1. ลบตัว \r (Carriage Return) ที่อาจติดมาท้ายบรรทัด
+            # 2. แยก Path เพื่อหา Database Name (ลำดับที่ 6)
+            # 3. พิมพ์: [DB_Name],[ข้อมูลเดิมทุกคอลัมน์],[Full_Path]
+            # ใช้ OFS="," เพื่อคุมตัวคั่นตอนออกให้ชัดเจน
+            awk -F',' -v OFS=',' '{
+                sub(/\r$/, "", $0);
+                split(FILENAME, a, "/"); 
+                print a[6], $0, FILENAME 
+            }' ${SRC_REC_GP} >> "$FULL_PATH_REC_GP"
 
             data_ln=$(cat ${SRC_REC_GP} | wc -l)
             TOTAL_EXP_REC_GP=$((TOTAL_EXP_REC_GP + data_ln))
@@ -222,16 +269,31 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
     # --- SOURCE 4: Compare Content ---
     if [ "$RUN_COMP_CONTENT" == "Y" ]; then
         echo "-------"
-        SRC_COMP_CONTENT="/MNT/GP_DWS/mig_compare_output/${CURRENT_DATE}/*/*/stat_csv/log_stat*.csv"
+        #SRC_COMP_CONTENT="/MNT/GP_DWS/mig_compare_output/${CURRENT_DATE}/*/*/stat_csv/log_stat*.csv"
+        SRC_COMP_CONTENT="/MNT/GP_DWS/mig_reconcile_stat_log/*/${CURRENT_DATE}/Compare_Detail*.csv"
         echo "SRC_COMP_CONTENT: ${SRC_COMP_CONTENT}"
         if ls ${SRC_COMP_CONTENT} 1> /dev/null 2>&1; then
 
-            echo "   -> Processing Compare Content (Removing Headers)..."
-            sed -s '1d' ${SRC_COMP_CONTENT} >> "$FULL_PATH_COMP_CONTENT"
+            echo "   -> Processing Compare Content (Removing Headers & Adding FULL_PATH)..."
 
-            raw_ln=$(cat ${SRC_COMP_CONTENT} | wc -l) 
-            f_cnt=$(ls -1 ${SRC_COMP_CONTENT} | wc -l) 
-            data_ln=$((raw_ln - f_cnt)) 
+            #sed -s '1d' ${SRC_COMP_CONTENT} >> "$FULL_PATH_COMP_CONTENT"
+
+            # ใช้ awk แทน sed เพื่อลบ Header และเพิ่ม FILENAME (Full Path) ไว้หลังสุด
+            # -F'|' และ OFS='|' กรณีใช้ Pipe เป็นตัวคั่น
+            # FNR > 1 คือการข้ามบรรทัดแรกของ 'ทุกไฟล์' ที่เจอใน wildcard
+            # 1. ลบตัว \r ที่ท้ายบรรทัดออก เพื่อไม่ให้ Cursor ดีดกลับไปทับบรรทัดเดิม
+            awk -F'|' -v OFS='|' 'FNR > 1 {
+                sub(/\r$/, "", $0);
+                print $0, FILENAME;
+            }' ${SRC_COMP_CONTENT} >> "$FULL_PATH_COMP_CONTENT"
+
+            #raw_ln=$(cat ${SRC_COMP_CONTENT} | wc -l)
+            #f_cnt=$(ls -1 ${SRC_COMP_CONTENT} | wc -l)
+            #data_ln=$((raw_ln - f_cnt))
+
+            # นับจำนวนบรรทัดที่ Export จริง (เฉพาะบรรทัดข้อมูล)
+            # ใช้ awk ตัวเดิมนับจำนวนบรรทัดที่ผ่านเงื่อนไข FNR > 1
+            data_ln=$(awk 'FNR > 1 {count++} END {print count+0}' ${SRC_COMP_CONTENT})
 
             TOTAL_EXP_COMP_CONTENT=$((TOTAL_EXP_COMP_CONTENT + data_ln))
         else
@@ -242,16 +304,31 @@ while [ "$CURRENT_DATE" -le "$END_DATE" ]; do
     # --- SOURCE 5: Compare Count ---
     if [ "$RUN_COMP_COUNT" == "Y" ]; then
         echo "-------"
-        SRC_COMP_COUNT="/MNT/GP_DWS/mig_compare_output/${CURRENT_DATE}/*/*/stat_csv/log_stat*.csv"
+        #SRC_COMP_COUNT="/MNT/GP_DWS/mig_compare_output/${CURRENT_DATE}/*/*/stat_csv/log_stat*.csv"
+        SRC_COMP_COUNT="/MNT/GP_DWS/mig_reconcile_stat_log/*/${CURRENT_DATE}/Compare_Header*.csv"
         echo "SRC_COMP_COUNT: ${SRC_COMP_COUNT}"
         if ls ${SRC_COMP_COUNT} 1> /dev/null 2>&1; then
 
-            echo "   -> Processing Compare Count (Removing Headers)..."
-            sed -s '1d' ${SRC_COMP_COUNT} >> "$FULL_PATH_COMP_COUNT"
+            echo "   -> Processing Compare Count (Removing Headers & Adding FULL_PATH)..."
 
-            raw_ln=$(cat ${SRC_COMP_COUNT} | wc -l) 
-            f_cnt=$(ls -1 ${SRC_COMP_COUNT} | wc -l) 
-            data_ln=$((raw_ln - f_cnt)) 
+            #sed -s '1d' ${SRC_COMP_COUNT} >> "$FULL_PATH_COMP_COUNT"
+
+            # ใช้ awk แทน sed เพื่อลบ Header และเพิ่ม FILENAME (Full Path) ไว้หลังสุด
+            # -F'|' และ OFS='|' กรณีใช้ Pipe เป็นตัวคั่น
+            # FNR > 1 คือการข้ามบรรทัดแรกของ 'ทุกไฟล์' ที่เจอใน wildcard
+            # 1. ลบตัว \r ที่ท้ายบรรทัดออก เพื่อไม่ให้ Cursor ดีดกลับไปทับบรรทัดเดิม
+            awk -F'|' -v OFS='|' 'FNR > 1 {
+                sub(/\r$/, "", $0);
+                print $0, FILENAME;
+            }' ${SRC_COMP_COUNT} >> "$FULL_PATH_COMP_COUNT"
+
+            #raw_ln=$(cat ${SRC_COMP_COUNT} | wc -l) 
+            #f_cnt=$(ls -1 ${SRC_COMP_COUNT} | wc -l) 
+            #data_ln=$((raw_ln - f_cnt)) 
+
+            # นับจำนวนบรรทัดที่ Export จริง (เฉพาะบรรทัดข้อมูล)
+            # ใช้ awk ตัวเดิมนับจำนวนบรรทัดที่ผ่านเงื่อนไข FNR > 1
+            data_ln=$(awk 'FNR > 1 {count++} END {print count+0}' ${SRC_COMP_COUNT})
 
             TOTAL_EXP_COMP_COUNT=$((TOTAL_EXP_COMP_COUNT + data_ln))
         else
@@ -368,7 +445,16 @@ upload_to_specific_table() {
 
         # 3. \copy ข้อมูลเข้าตาราง
         echo -e "${BLUE}├─${NC} Action : Uploading data..."
-        local copy_cmd="\\copy $table_name FROM '$file_path' CSV QUOTE '\"';"
+        #local copy_cmd="\\copy $table_name FROM '$file_path' CSV QUOTE '\"';"
+
+        if [[ "$label" == "COMPARE CONTENT" ]] || [[ "$label" == "COMPARE COUNT" ]]; then
+            # สำหรับงาน Compare ใช้ Delimiter เป็น Pipe |
+            local copy_cmd="\\copy $table_name FROM '$file_path' CSV DELIMITER '|' QUOTE '\"';"
+        else
+            # สำหรับงานอื่นๆ ใช้ Default (Comma)
+            local copy_cmd="\\copy $table_name FROM '$file_path' CSV QUOTE '\"';"
+        fi
+
         run_psql_command "$copy_cmd" || return 1
 
         #if [ $? -eq 0 ]; then
