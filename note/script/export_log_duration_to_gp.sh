@@ -2,6 +2,7 @@
 
 # --- 1. Setup Variables & Validation ---
 now_date=$(date +%Y%m%d_%H%M%S)
+RUN_DATE=$(date +%Y%m%d)
 START_DATE=$1
 END_DATE=$2
 SCRIPT_NAME=$(basename "$0")
@@ -523,8 +524,77 @@ else
     exit 1
 fi
 
-
 echo "=============================================================="
 echo "🎯 ALL DATABASE TASKS COMPLETED"
 echo "=============================================================="
 
+
+# --- 6. Export Views to CSV ---
+echo ""
+echo "=============================================================="
+echo "📤 DATABASE VIEW EXPORT PROCESS"
+echo "=============================================================="
+
+# กำหนด Path สำหรับเก็บไฟล์ Export (สร้าง Folder 'export_views' ภายใต้ path_log_output)
+path_export_views="${path_log_output}export_views/${RUN_DATE}/"
+check_and_create_dir "$path_export_views"
+
+# รายชื่อ View ที่ต้องการดึงข้อมูล
+# Format: "ชื่อ View|ชื่อไฟล์"
+VIEWS_TO_EXPORT=(
+    "gpoffload.vw_log_latest|export_log_latest"
+    "gpoffload.vw_log_query_gp_latest|export_log_query_gp_latest"
+    "gpoffload.vw_log_query_pq_latest|export_log_query_pq_latest"
+    "gpoffload.vw_log_reconcile_status_count_latest|export_log_reconcile_status_count_latest"
+    "gpoffload.vw_log_reconcile_result_content_latest|export_log_reconcile_result_content_latest"
+)
+
+export_view_to_csv() {
+    local view_name="$1"
+    local file_name="$2"
+    local full_export_path="${path_export_views}${file_name}_${now_date}.csv"
+
+    echo -e "\n${BLUE}│${NC}"
+    printf "${BLUE}│  ${YELLOW}Exporting View: %s${NC}\n" "$view_name"
+    echo -e "${BLUE}├───────────────────────────────────${NC}"
+    printf "${BLUE}│${NC}  Target File : ${BLUE}%s${NC}\n" "$(basename "$full_export_path")"
+
+    # ใช้ \copy ในการ Export ออกมาเป็น CSV พร้อม Header
+    local export_cmd="\\copy (SELECT * FROM $view_name) TO '$full_export_path' WITH CSV HEADER DELIMITER '|' QUOTE '\"';"
+
+    echo -e "${BLUE}├─${NC} Action : Fetching data..."
+    run_psql_command "$export_cmd"
+    local status=$?
+
+    if [ $status -eq 0 ]; then
+        local row_count=$(wc -l < "$full_export_path")
+        # ลบ 1 ออกเพราะมี Header
+        row_count=$((row_count - 1))
+        printf "${BLUE}│  ${GREEN}✔${NC} Export Completed! (Rows: ${YELLOW}%s${NC})\n" "$row_count"
+    else
+        printf "${BLUE}│  ${RED}✘${NC} Export Failed!\n"
+    fi
+    echo -e "${BLUE}└───────────────────────────────────${NC}"
+    
+    return $status
+}
+
+# เริ่มต้นการ Export ตามรายชื่อใน Array
+ANY_EXPORT_FAIL=0
+
+for entry in "${VIEWS_TO_EXPORT[@]}"; do
+    IFS="|" read -r view file <<< "$entry"
+    export_view_to_csv "$view" "$file"
+    if [ $? -ne 0 ]; then ANY_EXPORT_FAIL=1; fi
+done
+
+echo ""
+if [ $ANY_EXPORT_FAIL -eq 0 ]; then
+    echo -e "   -> ${GREEN}[INFO]${NC} All views exported successfully to: $path_export_views"
+else
+    echo -e "   -> ${RED}[WARNING]${NC} Some view exports encountered errors. Please check the logs."
+fi
+
+echo "=============================================================="
+echo "🎯 ALL TASKS COMPLETED SUCCESSFULLY"
+echo "=============================================================="
