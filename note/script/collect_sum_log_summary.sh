@@ -12,12 +12,32 @@ ensure_dir() {
     fi
 }
 
+# Function ตรวจสอบวันที่
+check_date() {
+    local input_date=$1
+    if ! [[ "$input_date" =~ ^[0-9]{8}$ ]]; then
+        echo -e "${RED}[ERROR]${NC}: Invalid format '$input_date'. Please use YYYYMMDD."
+        exit 1
+    fi
+    date -d "$input_date" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}[ERROR]${NC}: Date '$input_date' is invalid (does not exist)."
+        exit 1
+    fi
+    echo -e "${GREEN}[OK]${NC} Date '$input_date' is valid."
+}
+
+
+
 # 1. ตรวจสอบ uuidgen
 if ! command -v uuidgen > /dev/null 2>&1; then
     echo "Error: command 'uuidgen' not found."
     exit 1
 fi
 MY_UUID=$(uuidgen)
+
+# สร้างตัวแปร Timestamp สำหรับชื่อไฟล์
+RUN_TIME=$(date +"%Y%m%d_%H%M%S")
 
 # 2. รับค่า Parameter
 DATE_START=$1
@@ -29,6 +49,9 @@ if [[ -z "$DATE_START" || -z "$DATE_END" ]]; then
     echo "Usage: $0 <YYYYMMDD_START> <YYYYMMDD_END> [database] [schema]"
     exit 1
 fi
+
+check_date "$START_DATE"
+check_date "$END_DATE"
 
 # 3. กำหนด Databases
 if [[ -n "$DB_INPUT" ]]; then
@@ -69,9 +92,10 @@ for DB in "${DATABASES[@]}"; do
     RAW_COLLECT_FILE="$TEMP_DIR/raw_$DB.txt"
     > "$RAW_COLLECT_FILE"
 
+    # ตัวแปรสำหรับเก็บจำนวนบรรทัดสะสม (เพื่อใช้ทำ Auto Verify)
     PREV_TOTAL=0
-    CURRENT_DATE="$DATE_START"
 
+    CURRENT_DATE="$DATE_START"
     while [ "$CURRENT_DATE" -le "$DATE_END" ]; do
         # ใช้ SCHEMA_PATTERN ใน Path (ถ้าไม่ระบุจะเป็น * ถ้าระบุจะเป็นชื่อ schema)
         FILES_PATTERN="$SOURCE_BASE/$CURRENT_DATE/$DB/$SCHEMA_PATTERN/*.sum"
@@ -85,14 +109,17 @@ for DB in "${DATABASES[@]}"; do
             # 2. รวมไฟล์
             cat $FILES_PATTERN >> "$RAW_COLLECT_FILE"
             
-            # 3. คำนวณค่าที่ควรจะเป็น และนับค่าจริง
+            # 3. คำนวณค่าที่ควรจะเป็น (Expected)
             EXPECTED_TOTAL=$((PREV_TOTAL + RECORDS_TODAY))
+            
+            # 4. นับค่าจากไฟล์จริง (Actual)
             ACTUAL_TOTAL=$(wc -l < "$RAW_COLLECT_FILE")
 
             # --- [ AUTO VERIFY LOGIC ] ---
             if [ "$ACTUAL_TOTAL" -ne "$EXPECTED_TOTAL" ]; then
                 echo "  [ERROR] Data Integrity Mismatch on $CURRENT_DATE!"
-                echo "          Expected: $EXPECTED_TOTAL | Actual: $ACTUAL_TOTAL"
+                echo "          Expected: $EXPECTED_TOTAL | Actual  : $ACTUAL_TOTAL"
+                echo "          Process terminated to prevent data corruption."
                 exit 1
             fi
             # -----------------------------
@@ -106,8 +133,9 @@ for DB in "${DATABASES[@]}"; do
         CURRENT_DATE=$(date -d "$CURRENT_DATE + 1 day" +"%Y%m%d")
     done
 
-    # 7. ประมวลผลหา Latest Record และจัดเรียง
-    FINAL_OUTPUT="$OUTPUT_DIR/summary_sum_$DB.txt"
+    # 7. ประมวลผลหา Latest Record (Group by $1|$2) และจัดเรียง
+    TS_OUTPUT="$OUTPUT_DIR/summary_sum_${DB}_${RUN_TIME}_${MY_UUID}.txt"
+
     if [ -s "$RAW_COLLECT_FILE" ]; then
         awk -F'|' '{
             table_key = $1 "|" $2
@@ -118,13 +146,14 @@ for DB in "${DATABASES[@]}"; do
             }
         } END {
             for (key in full_record) print full_record[key]
-        }' "$RAW_COLLECT_FILE" | sort -t'|' -k4r > "$FINAL_OUTPUT"
+        }' "$RAW_COLLECT_FILE" | sort -t'|' -k4r > "$TS_OUTPUT"
         
-        FINAL_COUNT=$(wc -l < "$FINAL_OUTPUT")
+
+        FINAL_COUNT=$(wc -l < "$TS_OUTPUT")
         echo "  => DONE: $DB saved with $FINAL_COUNT unique records."
+        echo "     File: $TS_OUTPUT"
     fi
     echo "---------------------------------------"
 done
 
-# rm -rf "$TEMP_DIR"
 echo "All tasks completed successfully!"
