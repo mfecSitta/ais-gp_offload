@@ -1,139 +1,146 @@
 #!/bin/bash
 
-# function to ensure directory exists, if not create it
+# --- 1. กำหนดค่าสี ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color (ล้างค่าสี)
+
+# --- 2. ฟังก์ชันช่วยงาน ---
+
+# ฟังก์ชันตรวจสอบ Folder
 ensure_dir() {
     local target_dir="$1"
     if [ ! -d "$target_dir" ]; then
         mkdir -p "$target_dir" || {
-            echo "Error: Cannot create directory $target_dir" >&2
+            echo -e "${RED}[ERROR]${NC}: Cannot create directory $target_dir" >&2
             exit 1
         }
-        echo "Success: Created $target_dir"
+        echo -e "[INFO]: Created $target_dir"
     fi
 }
 
-# Function ตรวจสอบวันที่
+# ฟังก์ชันตรวจสอบวันที่ (แก้ไขชื่อตัวแปรให้ตรงกับ parameter)
 check_date() {
     local input_date=$1
     if ! [[ "$input_date" =~ ^[0-9]{8}$ ]]; then
         echo -e "${RED}[ERROR]${NC}: Invalid format '$input_date'. Please use YYYYMMDD."
         exit 1
     fi
+    # ตรวจสอบว่าเป็นวันที่ที่มีอยู่จริง (เช่น ไม่ใช่ 20240230)
     date -d "$input_date" >/dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo -e "${RED}[ERROR]${NC}: Date '$input_date' is invalid (does not exist)."
         exit 1
     fi
-    echo -e "${GREEN}[OK]${NC} Date '$input_date' is valid."
+    echo -e "${GREEN}[VERIFY]${NC}: Valid date: $input_date"
 }
 
+# --- 3. เริ่มต้นกระบวนการ ---
 
-
-# 1. ตรวจสอบ uuidgen
+# ตรวจสอบ uuidgen
 if ! command -v uuidgen > /dev/null 2>&1; then
-    echo "Error: command 'uuidgen' not found."
+    echo -e "${RED}[ERROR]${NC}: command 'uuidgen' not found."
     exit 1
 fi
 MY_UUID=$(uuidgen)
-
-# สร้างตัวแปร Timestamp สำหรับชื่อไฟล์
 RUN_TIME=$(date +"%Y%m%d_%H%M%S")
 
-# 2. รับค่า Parameter
+# รับค่า Parameter
 DATE_START=$1
 DATE_END=$2
 DB_INPUT=$3
-SCHEMA_INPUT=$4  # Parameter ตัวที่ 4: Schema
+SCHEMA_INPUT=$4
 
 if [[ -z "$DATE_START" || -z "$DATE_END" ]]; then
-    echo "Usage: $0 <YYYYMMDD_START> <YYYYMMDD_END> [database] [schema]"
+    echo -e "[INFO]: Usage: $0 <YYYYMMDD_START> <YYYYMMDD_END> [database] [schema]"
     exit 1
 fi
 
-check_date "$START_DATE"
-check_date "$END_DATE"
+# ตรวจสอบความถูกต้องของวันที่
+echo -e "[INFO]: Validating input dates..."
+check_date "$DATE_START"
+check_date "$DATE_END"
+echo ""
 
-# 3. กำหนด Databases
+echo -e "[INFO]: Input Parameters:"
+# กำหนด Databases
 if [[ -n "$DB_INPUT" ]]; then
     DATABASES=("$DB_INPUT")
-    echo "Database specified: $DB_INPUT"
+    echo -e "[INFO]: Database specified: $DB_INPUT"
 else
     DATABASES=("prodgp" "misgp" "csmgp")
-    echo "No database specified. Defaulting to: ${DATABASES[*]}"
+    echo -e "[INFO]: No database specified. Defaulting to: ${DATABASES[*]}"
 fi
 
-# 4. กำหนด Schema Pattern
+# กำหนด Schema Pattern
 if [[ -n "$SCHEMA_INPUT" ]]; then
     SCHEMA_PATTERN="$SCHEMA_INPUT"
-    echo "Schema specified: $SCHEMA_INPUT"
+    echo -e "[INFO]: Schema specified: $SCHEMA_INPUT"
 else
     SCHEMA_PATTERN="*"
-    echo "No schema specified. Using wildcard (*)"
+    echo -e "[INFO]: No schema specified. Using wildcard (*)"
 fi
+echo ""
 
-# 5. กำหนด Path
+
+# กำหนด Path
 OUTPUT_DIR="/MNT/GP_DWS/encryption/script_encryption/temp/collect_result/output"
 SOURCE_BASE="/MNT/GP_DWS/encryption/stat_log"
 TEMP_DIR="/MNT/GP_DWS/encryption/script_encryption/temp/collect_result/tmp/stat_log_process_$MY_UUID"
 
 ensure_dir "$OUTPUT_DIR"
 ensure_dir "$TEMP_DIR"
+echo ""
 
-echo "Starting log collection and processing..."
-echo "Date Range: $DATE_START to $DATE_END"
+echo -e "[INFO]: Starting log collection and processing..."
+echo -e "[INFO]: Date Range: $DATE_START to $DATE_END"
 echo "---------------------------------------"
-echo "UUID: $MY_UUID"
+echo -e "[INFO]: UUID: $MY_UUID"
 echo "---------------------------------------"
 
-# 6. เริ่มประมวลผลราย Database
+# --- 4. เริ่มประมวลผลราย Database ---
 for DB in "${DATABASES[@]}"; do
-    echo "Processing Database: $DB"
+    echo -e "[INFO]: Processing Database: $DB"
     
     RAW_COLLECT_FILE="$TEMP_DIR/raw_$DB.txt"
     > "$RAW_COLLECT_FILE"
 
-    # ตัวแปรสำหรับเก็บจำนวนบรรทัดสะสม (เพื่อใช้ทำ Auto Verify)
     PREV_TOTAL=0
-
     CURRENT_DATE="$DATE_START"
+
     while [ "$CURRENT_DATE" -le "$DATE_END" ]; do
-        # ใช้ SCHEMA_PATTERN ใน Path (ถ้าไม่ระบุจะเป็น * ถ้าระบุจะเป็นชื่อ schema)
         FILES_PATTERN="$SOURCE_BASE/$CURRENT_DATE/$DB/$SCHEMA_PATTERN/*.sum"
         
         RECORDS_TODAY=0
-        # ใช้พจนานุกรม ls เพื่อเช็คไฟล์
         if ls $FILES_PATTERN >/dev/null 2>&1; then
-            # 1. นับจำนวน Record ของวันนี้
+            # 1. นับจำนวน Record
             RECORDS_TODAY=$(cat $FILES_PATTERN 2>/dev/null | wc -l)
             
             # 2. รวมไฟล์
             cat $FILES_PATTERN >> "$RAW_COLLECT_FILE"
             
-            # 3. คำนวณค่าที่ควรจะเป็น (Expected)
+            # 3. ตรวจสอบ Integrity
             EXPECTED_TOTAL=$((PREV_TOTAL + RECORDS_TODAY))
-            
-            # 4. นับค่าจากไฟล์จริง (Actual)
             ACTUAL_TOTAL=$(wc -l < "$RAW_COLLECT_FILE")
 
-            # --- [ AUTO VERIFY LOGIC ] ---
             if [ "$ACTUAL_TOTAL" -ne "$EXPECTED_TOTAL" ]; then
-                echo "  [ERROR] Data Integrity Mismatch on $CURRENT_DATE!"
-                echo "          Expected: $EXPECTED_TOTAL | Actual  : $ACTUAL_TOTAL"
-                echo "          Process terminated to prevent data corruption."
+                echo -e "${RED}[ERROR]${NC}: Data Integrity Mismatch on $CURRENT_DATE!"
+                echo -e "         Expected: $EXPECTED_TOTAL | Actual: $ACTUAL_TOTAL"
+                echo -e "         Process terminated."
                 exit 1
             fi
-            # -----------------------------
 
-            echo "  - $CURRENT_DATE: +$RECORDS_TODAY records (Total: $ACTUAL_TOTAL) [OK]"
+            echo -e "${GREEN}[VERIFY]${NC}: $CURRENT_DATE: +$RECORDS_TODAY records (Accumulated: $ACTUAL_TOTAL)"
             PREV_TOTAL=$ACTUAL_TOTAL
         else
-            echo "  - $CURRENT_DATE: No files found for database [$DB] and schema [$SCHEMA_PATTERN] [Skip]"
+            echo -e "${YELLOW}[SKIP]${NC}: $CURRENT_DATE: No files found for DB [$DB] and Schema [$SCHEMA_PATTERN]"
         fi
         
         CURRENT_DATE=$(date -d "$CURRENT_DATE + 1 day" +"%Y%m%d")
     done
 
-    # 7. ประมวลผลหา Latest Record (Group by $1|$2) และจัดเรียง
+    # --- 5. สรุปผลหา Latest Record ---
     TS_OUTPUT="$OUTPUT_DIR/summary_sum_${DB}_${RUN_TIME}_${MY_UUID}.txt"
 
     if [ -s "$RAW_COLLECT_FILE" ]; then
@@ -147,13 +154,13 @@ for DB in "${DATABASES[@]}"; do
         } END {
             for (key in full_record) print full_record[key]
         }' "$RAW_COLLECT_FILE" | sort -t'|' -k4r > "$TS_OUTPUT"
-        
 
         FINAL_COUNT=$(wc -l < "$TS_OUTPUT")
-        echo "  => DONE: $DB saved with $FINAL_COUNT unique records."
-        echo "     File: $TS_OUTPUT"
+        echo -e "${GREEN}[SUCCESS]${NC}: $DB processing complete."
+        echo -e "[INFO]: Saved $FINAL_COUNT unique records to: $TS_OUTPUT"
     fi
     echo "---------------------------------------"
 done
 
-echo "All tasks completed successfully!"
+# rm -rf "$TEMP_DIR"
+echo -e "[INFO]: All tasks completed successfully!"
